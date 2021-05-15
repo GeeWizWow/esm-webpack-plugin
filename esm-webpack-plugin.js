@@ -1,6 +1,8 @@
 const ConcatSource = require("webpack-sources").ConcatSource;
-const MultiModule = require("webpack/lib/MultiModule");
+// const MultiModule = require("webpack/lib/MultiModule");
+// const ExternalModule = require("webpack/lib/ExternalModule");
 const Template = require("webpack/lib/Template");
+const Compilation = require("webpack/lib/Compilation");
 const PLUGIN_NAME = "EsmWebpackPlugin";
 const warn = msg => console.warn(`[${PLUGIN_NAME}] ${msg}`);
 const IS_JS_FILE = /\.[cm]?js$/i;
@@ -65,12 +67,15 @@ function exportsForModule(module, libVar, pluginOptions) {
         return '';
     }
 
-    if (module instanceof MultiModule) {
-        module.dependencies.forEach(dependency => {
-            exports += exportsForModule(dependency.module, libVar, pluginOptions);
-        });
-    } else if (Array.isArray(module.buildMeta.providedExports)) {
-        module.buildMeta.providedExports.forEach(exportName => {
+    // TODO: Find Webpack 5 alternative
+    // if (module instanceof MultiModule) {
+    //     module.dependencies.forEach(dependency => {
+    //         exports += exportsForModule(dependency.module, libVar, pluginOptions);
+    //     });
+    // } else
+
+    if (module.buildInfo.topLevelDeclarations) {
+        module.buildInfo.topLevelDeclarations.forEach(exportName => {
             if (exportName === "default") {
                 exports += `export default ${libVar}['${exportName}'];\n`
             } else {
@@ -97,7 +102,7 @@ ${exports}${
 
 function importsForModule(chunk, pluginOptions) {
     if (pluginOptions.moduleExternals) {
-        const externals = chunk.getModules().filter(m => m.external);
+        const externals = chunk.getModules().filter(m => m.constructor.name === 'ExternalModule');
         const importStatements = externals.map(m => {
             const request = typeof m.request === 'object' ? m.request.amd : m.request;
             const identifier = `__WEBPACK_EXTERNAL_MODULE_${Template.toIdentifier(`${m.id}`)}__`;
@@ -184,7 +189,7 @@ function importsForModule(chunk, pluginOptions) {
 }
 
 function compilationTap(compilation) {
-    const libVar = compilation.outputOptions.library;
+    const libVar = compilation.outputOptions.library.name;
     const exclude = this._options.exclude;
 
     if (!libVar) {
@@ -192,11 +197,11 @@ function compilationTap(compilation) {
     }
 
     if (
-        compilation.outputOptions.libraryTarget &&
-        compilation.outputOptions.libraryTarget !== "var" &&
-        compilation.outputOptions.libraryTarget !== "assign"
+        compilation.outputOptions.library.type &&
+        compilation.outputOptions.library.type !== "var" &&
+        compilation.outputOptions.library.type !== "assign"
     ) {
-        warn(`output.libraryTarget (${compilation.outputOptions.libraryTarget}) expected to be 'var' or 'assign'!`);
+        warn(`output.library.type (${compilation.outputOptions.library.type}) expected to be 'var' or 'assign'!`);
     }
 
     if (this._options.moduleExternals) {
@@ -210,9 +215,13 @@ function compilationTap(compilation) {
         });
     }
 
-    compilation.hooks.optimizeChunkAssets.tapAsync(PLUGIN_NAME, (chunks, done) => {
-        chunks.forEach(chunk => {
-            if (chunk.entryModule && chunk.entryModule.buildMeta.providedExports) {
+    compilation.hooks.processAssets.tapAsync({ name: PLUGIN_NAME, stage: Compilation.PROCESS_ASSETS_STAGE_OPTIMIZE }, (assets, done) => {
+        compilation.chunks.forEach(chunk => {
+
+            if (
+                chunk.entryModule
+                && chunk.entryModule.buildInfo.topLevelDeclarations
+            ) {
                 chunk.files.forEach(fileName => {
                     if (exclude && exclude(fileName, chunk)) {
                         return;
